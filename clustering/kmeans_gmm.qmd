@@ -1,0 +1,578 @@
+---
+title: "Machine Learning for Social Science - Assignment 4"
+author: "Yun-Tsz Tsai"
+format: pdf
+editor: visual
+crossref:
+  fig-title: "**Figure**"
+  fig-labels: arabic
+  title-delim: "**.**"
+  tbl-title: "**Table**"
+  tbl-labels: arabic
+knitr:
+  opts_knit:
+    root.dir: "C:/Users/VivoBook/OneDrive - Linköpings universitet/25HT_machine_learning/Lab4"
+---
+
+```{r}
+#| label: setup
+#| include: false
+
+#set working directory 
+knitr::opts_knit$set(root.dir = "C:/Users/VivoBook/OneDrive - Linköpings universitet/25HT_machine_learning/Lab4")
+
+library(data.table); library(ggplot2); library(mlbench)
+library(elasticnet); library(mclust); library(dplyr)
+library(ggrepel)
+```
+
+## Part 1: Taste clustering and influence
+
+### 1-1 Data exploration
+
+The dataset contains a total of 1075 variables and 4 columns, in which includes three music genres and their influence on others.
+
+```{r}
+#| label: fig-scatter
+#| layout-ncol: 3
+#| warning: false
+#| message: false
+
+# import the data
+dat <- read.csv("./taste_influence.csv")
+
+dat <- dat %>% scale() %>% as.data.frame()
+
+# extract the col names 
+genres <- names(dat[, -c(4)]) # remove the col "influence"
+# create all combinations
+combs <- combn(genres, 2, simplify = FALSE)
+
+# a function for visualization
+visualization <- function(combos, data){
+  plots <- list()
+  for (i in seq_along(combos)){
+    xlab <- combos[[i]][1]
+    ylab <- combos[[i]][2]
+    fig <- ggplot(data = data, aes_string(x = xlab, y = ylab)) +
+      geom_point(color = "skyblue")
+    print(fig)
+    # plots[[i]] <- fig
+  }
+  # return(plots)
+}
+
+visualization(combs, dat)
+```
+
+I created three scatter plots (see @fig-scatter) with all the possible combination of 2 of the three music genres. Although it is possible to identify some patterns in the data, the clusters are no very clear. Note that the data has been standardized prior to visualization.
+
+### 1-2 Data preparation
+
+In this part I applied clustering algorithm on the data points, with three genres (*jazz*, *pop*, and *hiphop*) being the variables on which the clustering is base.
+
+```{r}
+#| warning: false
+#| message: false
+
+library(glue)
+# subset the data
+dat_3c <- dat %>% 
+  select(genres) %>% 
+  as.matrix()
+```
+
+### 1-3 Clustering
+
+There is no fixed value for selecting K, which represents the number of groups the data points will be divided into. Consequently, one usually starts with an exploratory approach by fitting several different Ks and selects the K by evaluating the *within cluster sum of square.*
+
+```{r}
+#| label: fig-clustering 
+#| fig-align: "center"
+#| fig-cap: "WSS as a Function of K"
+#| warning: false
+#| message: false
+
+set.seed(2025)
+# the number of K
+ks <- 1:20
+# a vector for storing the results
+wss <- c()
+# calculate wss at each K value
+for(i in 1:length(ks)){
+  result <- kmeans(x = dat_3c, centers = ks[i], nstart = 100)
+  wss[i] <- result$tot.withinss
+}
+
+# plot k against wss
+cbind(ks, wss) %>% 
+  ggplot(aes(x = ks, y = wss)) +
+  geom_point() +
+  geom_line() +
+  geom_vline(xintercept = 6, linetype = 'dashed', 
+             color = 'darkblue') +
+  labs(x = "Number of K", y = "within Cluster Sum of Square") 
+  
+```
+
+@fig-clustering illustrates the within cluster sum of square at different K values. It is clear that when $K = 6$, one stops to see significant decrease in *within cluster sum of square*.
+
+### 1-4 Specification of K
+
+I decided to choose $K = 6$ gievn the aforementioned reason and that this is the point when the model strikes a balnce between variance and bias (model complexity).
+
+```{r}
+#| warning: false
+#| message: false
+
+library(scatterplot3d)
+# k = 6
+set.seed(2025)
+result_6 <- kmeans(dat_3c, centers = 6, nstart = 100)
+result_6$centers
+```
+
+```{r}
+#| label: fig-3d
+#| fig-align: "center"
+#| fig-cap: "Visualization of Clustering with k = 6"
+#| warning: false
+#| message: false
+
+df <- result_6$centers %>% as.data.frame()
+df %>% 
+scatterplot3d(x = df$jazz, y = df$pop, z = df$hiphop, 
+              pch = 19, color = "skyblue",
+              cex.symbols = 2,
+              xlab = "Jazz", ylab = "Pop", zlab = "Hiphop",
+              main = "", sub = "")
+
+```
+
+The results seem reasonable as they present considerable amount of dissimilarity between groups and if visualized in a graph with three dimensional coordinate (a shown in @fig-3d), one can see clearly the groups are well divided without much overlaps, which is what one usually looks for when implementing clustering. The attributes of the six groups is described as follows:
+
+*Group 1*: Prefers hiphop and dislike the other two genres
+
+*Group 2:* Likes Jazz a lot but does not like the other two genres
+
+*Group 3:* Likes both jazz and hiphop but does not like pop
+
+*Group 4:* Dislikes all of the three genres
+
+*Group 5:* Likes pop but dislikes the other two genres
+
+*Group 6:* Likes both pop and hiphop but does not like jazz
+
+### 1-5 When k = 2
+
+The classification using *K = 2* also seems pretty reasonable as one can see the clear distinction between groups. However, given the patterns we observed previously (much over laps between data points), one might be concerned that about a lack of granularity of the results.
+
+With *K = 2*, there are only two groups, a group that likes pop and hiphop but dislikes jazz and the other group that likes jazz a lot but is not much a fan of the other two genres.
+
+```{r}
+#| label: fig-3d-2
+#| fig-align: "center"
+#| fig-cap: "Visualization of Clustering with k = 2"
+#| warning: false
+#| message: false
+
+# k = 2
+set.seed(2025)
+result_2 <- kmeans(dat_3c, centers = 2, nstart = 100)
+# check the centroids of the group
+result_2$centers
+
+df <- result_2$centers %>% as.data.frame()
+# visualization
+df %>% 
+scatterplot3d(x = df$jazz, y = df$pop, z = df$hiphop, 
+              pch = 19, color = "skyblue",
+              cex.symbols = 2,
+              xlab = "Jazz", ylab = "Pop", zlab = "Hiphop",
+              main = "", sub = "")
+
+```
+
+### 1-6 The impact of taste types on others
+
+Here I fit a linear model using *influence* as an output variable and the assigned cluster as an input variable. The results show that *group 3*, indidviduals who like jazz and hiphop, has the strongest positive influence on others while *group 4 and 5* has strong and rather strong negative influence on others.
+
+```{r}
+#| warning: false
+#| message: false
+
+# add the cluster to the original data
+dat$cluster <- result_6$cluster %>% 
+  as.factor()
+
+# model 
+linear_md <- glm(influence~ cluster, data = dat, family = gaussian)
+summary(linear_md)
+```
+
+### 1-7 Visualization of the results
+
+It looks like the clustering algorithm did picked up some patterns in the data that are previously unseen in the data.
+
+```{r}
+#| label: fig-6group
+#| fig-align: "center"
+#| fig-cap: "Visualization of Data by Group"
+#| warning: false
+#| message: false
+
+cols <- as.factor(dat$cluster)
+cols <- adjustcolor(c("pink", "skyblue", "green", "purple",
+                      "yellow", "gray")[cols], alpha.f = 0.5)
+
+scatterplot3d(x= dat$jazz, y = dat$pop, z = dat$hiphop, 
+              pch = 19, color = cols,
+              xlab = "Jazz", ylab = "Pop", zlab = "Hiphop",
+              main = "", sub = "")
+
+```
+
+### 1-8 Gaussian mixture model
+
+This part repeats what is done from 1-3 to 1-7 (excluding 1-4) but here I applied Gaussian mixture model (GMM) on the same dataset.
+
+The biggest difference between K-means clustering and Gaussian mixture model is how they assign the group to the data points. The former uses hard-clustering, in which a data point is assigned entirely to one cluster while the latter uses soft-clustering, in which the algorithm first assigns each data point a probability distribution over all the possible groups and then assigns the cluster with highest probability to the data point.
+
+```{r}
+#| label: fig-7group
+#| fig-align: "center"
+#| fig-cap: "GMM - Visualization of Data by Group"
+#| warning: false
+#| message: false
+
+# empty vector for storing the results
+lls <- bics <- c() 
+ks <- 1:10 # the number of groups to test
+
+# fitting the model
+for(i in 1:10){
+  temp <- mclust::Mclust(data = dat_3c, G = ks[i])
+  lls[i] <- temp$loglik # log likehood
+  bics[i] <- temp$bic # bic, the bigger the better
+}
+
+# results as data frame
+gmm_df <- cbind(g = ks, bic = bics) %>% as.data.table()
+
+# visualization 
+gmm_df %>% 
+  ggplot(aes(x = g,  y = bic)) +
+  geom_point() +
+  geom_line() +
+  geom_vline(xintercept = which.max(gmm_df$bic), 
+             linetype = "dashed", 
+             color = "darkblue") +
+  scale_x_continuous(breaks=seq(0,10, by=1))
+
+# the best model
+gmm <- mclust::Mclust(data = dat_3c)
+
+# extract the centroids
+t(gmm$parameters$mean)
+
+# extract cluster assignments
+dat$cluster <- gmm$classification %>% as.factor()
+
+# visualization 
+cols <- dat$cluster
+cols <- adjustcolor(c("pink", "skyblue", "green", "purple",
+                      "yellow", "gray", "orange")[cols], alpha.f = 0.5)
+
+scatterplot3d(x= dat$jazz, y = dat$pop, z = dat$hiphop, 
+              pch = 19, color = cols,
+              xlab = "Jazz", ylab = "Pop", zlab = "Hiphop",
+              main = "", sub = "")
+```
+
+As shown in @fig-7group, BIC, a criterion for choosing the number of g, is highest when *g = 7*. Here *g* refers to the number of mixture components.
+
+According to the new clustering results by GMM, there is one new group which likes all the three music genres.
+
+### 1-9 Linear model
+
+Here once again I fitted two linear regression models on the data using *influence* as an output variable and firstly using the group assignment (*cluster*) as the single input variable and secondly adding the uncertainty (*uncertain*) (the higher the uncertainty, the more unsure the model is about the group assignment).
+
+The results show that the 7th group, the group that likes all the three music genres, has the most positive influence on others. This is quite intuitive as one will likely to expect that individuals who like all kinds of music (in this case, three different genres) will more likely to be able to relate with others, which in sociology is know as *homophily*.
+
+```{r}
+#| warning: false
+#| message: false
+
+# add a col "uncertainty" to the original data frame
+dat$uncertain <- gmm$uncertainty
+
+# lm wihtout uncertainty 
+md1 <- glm(influence ~ cluster, data = dat, family = gaussian)
+summary(md1)
+# lm with uncertianty 
+md2 <- glm(influence ~ cluster + uncertain, data = dat, family = gaussian )
+summary(md2)
+```
+
+## Part 2: Regional variation
+
+### 1-1 Data exploration
+
+```{r}
+#| warning: false
+#| message: false
+
+# load the data
+dat <- read.csv("./neighborhood.csv")
+
+```
+
+The dataset contains 200 observations and 25 variables (columns). The information covered in the dataset includes demographic data such as the education level, income and unemployment, as well as other information on individual preferences for the media they consume. All of the variables have been quantified and therefore the datatype is numeric. However, the values across variables are on different scales and thus the values varies considerably.
+
+### 1-2 Principle component analysis on unscaled data
+
+I suspected there is some correlations between variables and decided to employ a principle component analysis (PCA), which aims at describing data using fewer variables (dimensions). I stared with applying PCA on the data without scaling the data points.
+
+```{r}
+#| label: fig-pca-unscaled
+#| fig-align: "center"
+#| fig-cap: "Results of PCA - Unscaled"
+#| warning: false
+#| message: false
+
+# PCA without scaling 
+unscaled_pca <- prcomp(dat)
+
+# exmamine the results
+rslt_unscaled_pcs <- summary(unscaled_pca)
+# variable imp: variance capture by each varaible
+df <- data.frame(pc = names(rslt_unscaled_pcs$importance[2, ]),
+           v = unname(rslt_unscaled_pcs$importance[2, ])) 
+
+# turn the col "pc" into factor so ggplot draws them in the same order in which they appear descendingly
+df$pc <- factor(df$pc, levels = df$pc)
+
+# visualization
+df %>% 
+  ggplot(aes(x = pc, y = v)) +
+  geom_bar(stat = "identity") + 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  labs(x = "", y = "Variance Explanied by Variable")
+
+```
+
+It's clear that before scaling , there are four principle components that appear to explain much of the data.
+
+### 1-3 Principle component analysis on scaled data
+
+In this part I scaled the data and applied the same method to the aforementioned dataset.
+
+```{r}
+#| label: fig-pca-scaled
+#| fig-align: "center"
+#| fig-cap: "Results of PCA - Scaled"
+#| warning: false
+#| message: false
+
+# pca on scaled data
+scaled_pca <- dat %>% scale() %>% prcomp()
+
+# exmamine the results
+rslt_scaled_pcs <- summary(scaled_pca)
+# variable imp: variance capture by each varaible
+df <- data.frame(pc = names(rslt_scaled_pcs$importance[2, ]),
+           v = unname(rslt_scaled_pcs$importance[2, ])) 
+
+# turn the col "pc" into factor so ggplot draws them in the same order in which they appear descendingly
+df$pc <- factor(df$pc, levels = df$pc)
+
+# visualization
+df %>% 
+  ggplot(aes(x = pc, y = v)) +
+  geom_bar(stat = "identity") + 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  labs(x = "", y = "Variance Explanied by Variable")
+
+
+```
+
+As what \@fig-pca-scaled shows, there are only three principle components that contribute to much of the variance in the data.
+
+### 1-4 Interpretation
+
+However, having only a few principle components does not always make it easier to interpret the results.
+
+```{r}
+#| label: fig-pca-indi
+#| layout-ncol: 2
+#| fig-cap: "Results of PCA, Indivdual Plots"
+#| warning: false
+#| message: false
+
+# visualization of the standard PCA on scaled data
+library(factoextra)
+fviz_pca_ind(scaled_pca,
+             geom.ind = "point",
+             mean.point = FALSE,
+             pointsize = 3,
+             alpha.ind = 0.5,
+             title = "", 
+             col.ind = "skyblue")
+fviz_pca_var(scaled_pca, geom.var = "arrow")
+
+```
+
+@fig-pca-indi shows the individual data points as well as the composition of the biggest two principle components. In this case, a traditional PCA does not help much in terms of reducing the dimensionality of the data.
+
+### 1-5 Sparse PCA
+
+As shown in the previous section, the results of a traditional PCA are not very interpretable. I hereby applied sparse PCAs in an attempt to reduce the dimension of the data. Similarly to regularization techniques such as *Lasso* and *Ridge* in a linear regression context, a parse PCA imposes penalties, by which sets their coefficients to zero, on the variables.
+
+Here penalties ( $\lambda$) with different values are introduced. One can use cross-validation to choose the optimal $\lambda$ value, but another metric called *Index of sparseness* is commonly used in choosing $\lambda$ . The following equation shows how the index is calculated,
+
+$$
+IS = PEV_{sparse}\times PEV_{pca} \times PS
+$$
+
+where PS represents the proportion of zeros elements in corresponding principle component. The higher the index, the better.
+
+```{r}
+#| label: fig-sprase-pca
+#| fig-align: "center"
+#| fig-cap: "PEV x IS x PS for Neighborhood Data"
+#| warning: false
+#| message: false
+
+# set the penaltiy values
+penalities <- c(0,1,5,10,20,80,100,200,500,1000)
+
+# empty vector for storing the results
+spca_pevs <- numeric(length(penalities)) # sum of variance 
+spca_ps <- numeric(length(penalities)) # see below
+
+# applying spare pca
+for(i in 1:length(penalities)){
+  temp <- spca(x = scale(dat), 
+               K = 2, # the number of components 
+               type = "predictor", 
+               para = c(rep(penalities[i],ncol(dat))), 
+               sparse = "penalty")
+  # sum the proportion of explained variance for each spare pca
+  spca_pevs[i] <- sum(temp$pev)
+  # the variance covered by each varaible in each component
+  spca_loadings <- temp$loadings
+  # calculate the proportion of varaibles whose contribution to the ocmponent is close to zero
+  ps <- length(spca_loadings[abs(spca_loadings)<= 0.01]) / length(spca_loadings)
+  spca_ps[i] <- ps
+  if(length(ps) == 0){ps <- 0}
+}
+# create a data frame for visualization 
+is_pev_dt <- data.table(lambda=penalities,
+                        spca_PEV=spca_pevs,
+                        spca_PS=spca_ps)
+standard_PCA_PEV <- is_pev_dt[lambda == 0]$spca_PEV
+# create a new col in the data frame 
+is_pev_dt[,IS:=standard_PCA_PEV * spca_PEV * spca_PS]
+
+visualization <- ggplot(is_pev_dt, aes(x=spca_PS)) +
+  geom_line(aes(y = IS)) + 
+  geom_line(aes(y = spca_PEV),linetype = "dashed") +
+  # a secondary axis on the right
+  scale_y_continuous(name = "IS",
+    sec.axis = sec_axis(~.*1, name="PEV",breaks = scales::pretty_breaks(n=8)),
+    breaks = scales::pretty_breaks(n=8)) +
+  theme_gray(base_size = 10) +
+  # add text to the lines
+  geom_text_repel(
+    data = is_pev_dt[.N],
+    aes(y = IS, label = "IS"),
+    nudge_x = -0.01, hjust = 0,
+  ) +
+  geom_text_repel(
+    data = is_pev_dt[.N],
+    aes(y = spca_PEV, label = "PEV"),
+    nudge_x = -0.01,
+    nudge_y = 0.1, hjust = 0
+  )
+
+plot(visualization)
+```
+
+As shown in @fig-sprase-pca, we arrived at highest IS values when $\lambda$ = 80, which approximately 76% of the coefficients of the variables are close to zero. I will use this $\lambda$ value. ( *Note*, the $\lambda$ here refers to the parameter *para* in *spca()*)
+
+```{r}
+#| label: fig-sprase-pca-var
+#| fig-align: "center"
+#| fig-cap: "Composition of First Three Principle Components"
+#| warning: false
+#| message: false
+
+library(gt)
+final_spca <- spca(x = scale(dat), 
+                  K = 3, # here I changed K to 3
+                  type = 'predictor', 
+                  para = rep(80, ncol(dat)), 
+                  sparse = 'penalty')
+r_names <- names(dat)
+df <- cbind(var = r_names, round(final_spca$loadings, 3))
+# record all the rows in which all cols = 0
+empty_idx <- which(apply(df[, 2:4], 1, function(x) all(x == 0)))
+
+df <- df[-c(empty_idx), ]
+
+df %>% as.data.frame() %>%
+  gt(rowname_col = "var") %>%
+  tab_stubhead(label = "Variable") %>%
+  opt_table_font(font = list(default_fonts())) %>% 
+  gtsave("table.png")
+```
+
+![](table.png){#fig-sprase-pca-var fig-align="center" width="80%"}
+
+@fig-sprase-pca-var shows the components of the first three principle components. It's clear that after applying the penalty function, the coefficient of many variables are compressed to zero, which makes the results much more easy to interpret compared to the results obtained using a traditional PCA.
+
+### 1-6 PCA on simulated data
+
+PCA in this case does not help to reduce the dimensionality of the data and it is likely a result of the data sampling process, by which ensures the independence of the data points. PCA aims at captureing the maximized variance between the data points and therefore in this case, PCA fails to find a components that will capture more variance than others as the variance from which the data is generated is identical.
+
+```{r}
+#| warning: false
+#| message: false
+
+# function for generating data
+gen_data <- function(n,p){
+  df <- c()
+  for(i in 1:p){
+    ith_var <- rnorm(n = n, mean = 0, sd = 1)
+    df <- cbind(df,ith_var)}
+  return(df)
+}
+
+df <- gen_data(50, 50)
+# pca
+pca_results <- prcomp(df, scale = TRUE)
+
+# examine the results
+results <- summary(pca_results)
+
+variance <- data.frame(pc = names(results$importance[2, ]),
+           v = unname(results$importance[2, ])) 
+
+# turn the col "pc" into factor so ggplot draws them in the same order in which they appear descendingly
+variance$pc <- factor(variance$pc, levels = variance$pc)
+
+# visualization
+variance %>% 
+  ggplot(aes(x = pc, y = v)) +
+  geom_bar(stat = "identity") + 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  labs(x = "", y = "Variance Explanied by Variable")
+
+```
+
+## Quiz wrap-up
+
+1.  \*\*answers:\*\* a
+2.  \*\*answers:\*\* a, d
+3.  \*\*answers:\*\* The number of k (groups) and the within cluster sum of suqare (the lower the better)
+4.  \*\*answers:\*\* b, d
